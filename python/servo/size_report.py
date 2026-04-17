@@ -311,7 +311,8 @@ def build_markdown_report(
         (
             measurement
             for measurement in measurements
-            if measurement.removed_features and measurement.binary_size is not None
+            if baseline.binary_size is not None
+            and measurement.removed_features and measurement.binary_size is not None
             and (baseline.binary_size or 0) > (measurement.binary_size or 0)
         ),
         key=lambda measurement: (

@@ -10,13 +10,15 @@ FROM ubuntu:24.04 AS base
 
 # Install apt dependencies.
 COPY python/servo/platform/linux_packages /tmp/linux_packages
-RUN /tmp/linux_packages/generate_pkg_list.sh /tmp/linux_packages/apt/* > /tmp/apt-packages.txt \
-    && apt-get update \
-    && (xargs -a /tmp/apt-packages.txt apt-get install -y --no-install-recommends \
-    || (rm -rf /var/lib/apt/lists/* \
-    && apt-get update \
-    && xargs -a /tmp/apt-packages.txt apt-get install -y --no-install-recommends)) \
-    && curl --version
+RUN set -eux; \
+    /tmp/linux_packages/generate_pkg_list.sh /tmp/linux_packages/apt/* > /tmp/apt-packages.txt; \
+    apt-get update; \
+    if ! xargs -a /tmp/apt-packages.txt apt-get install -y --no-install-recommends; then \
+        rm -rf /var/lib/apt/lists/*; \
+        apt-get update; \
+        xargs -a /tmp/apt-packages.txt apt-get install -y --no-install-recommends; \
+    fi; \
+    curl --version
 
 # Required due to https://github.com/servo/servo/issues/35029
 RUN apt purge -y fonts-droid-fallback

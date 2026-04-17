@@ -293,6 +293,7 @@ class PostBuildCommands(CommandBase):
             measurement.feature_list = variant_features
 
             self.features = variant_features
+            # Keep the repo's baseline media selection unless a variant explicitly overrides it.
             self.enable_media = base_media_enabled if variant.media_stack is None else self.is_media_enabled(variant.media_stack)
             env = self.build_env()
             map_path = path.join(output_dir, f"{variant.name}.map")
@@ -458,7 +459,7 @@ class PostBuildCommands(CommandBase):
                 member_name = member.filename.lower()
                 if "/resources/" in member_name:
                     resource_size += member.file_size
-                if member_name.endswith((".dll", ".dylib", ".so")):
+                if member_name.endswith((".so", ".dylib", ".dll")):
                     library_size += member.file_size
                 if path.basename(member.filename).startswith("servoshell"):
                     binary_size += member.file_size

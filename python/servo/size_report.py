@@ -308,10 +308,10 @@ def build_markdown_report(
             measurement
             for measurement in measurements
             if measurement.removed_features and measurement.binary_size is not None
-            and (baseline.binary_size or 0) > measurement.binary_size
+            and (baseline.binary_size or 0) > (measurement.binary_size or 0)
         ),
         key=lambda measurement: (
-            -((baseline.binary_size or 0) - measurement.binary_size) / max(1, len(measurement.removed_features)),
+            ((measurement.binary_size or 0) - (baseline.binary_size or 0)) / max(1, len(measurement.removed_features)),
             measurement.name,
         ),
     )

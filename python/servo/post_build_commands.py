@@ -10,6 +10,7 @@
 import json
 import os
 import os.path as path
+from pathlib import Path
 import subprocess
 from subprocess import CompletedProcess
 from shutil import copy2
@@ -332,7 +333,7 @@ class PostBuildCommands(CommandBase):
                     context=self.context,
                     build_type=build_type,
                     flavor=flavor,
-                    preserve_app=self.target.triple().endswith("darwin"),
+                    preserve_app=servo.platform.get().is_macos,
                 )
                 if package_status not in (0, None):
                     return package_status
@@ -423,7 +424,7 @@ class PostBuildCommands(CommandBase):
         target_triple = self.target.triple()
         if is_android(self.target):
             return self.target.get_package_path(build_type.directory_name())
-        if "darwin" in target_triple:
+        if servo.platform.get().is_macos:
             return path.join(package_root, "Servo.app")
         if "windows" in target_triple:
             return path.join(package_root, "msi", "ServoShell.zip")
@@ -462,7 +463,7 @@ class PostBuildCommands(CommandBase):
                     resource_size += member.file_size
                 if member_name.endswith((".so", ".dylib", ".dll")):
                     library_size += member.file_size
-                if path.basename(member.filename).startswith("servoshell"):
+                if Path(member.filename).name.startswith("servoshell"):
                     binary_size += member.file_size
         return installed_size, resource_size, library_size, binary_size
 

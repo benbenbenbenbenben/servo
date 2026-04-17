@@ -327,7 +327,7 @@ def build_markdown_report(
                 measurement.name,
                 ", ".join(measurement.removed_features),
                 format_bytes(savings),
-                format_bytes(int(savings / max(1, len(measurement.removed_features)))),
+                format_bytes(int(savings / len(measurement.removed_features))),
             ]
         )
 

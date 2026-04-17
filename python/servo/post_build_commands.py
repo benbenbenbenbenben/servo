@@ -14,6 +14,7 @@ import subprocess
 from subprocess import CompletedProcess
 from shutil import copy2
 from typing import Any, Optional, List
+import zipfile
 
 import mozdebug
 
@@ -22,9 +23,23 @@ from mach.decorators import (
     CommandProvider,
     Command,
 )
+from mach.registrar import Registrar
 
 import servo.util
 import servo.platform
+from servo.size_report import (
+    DEFAULT_SIZE_REPORT_PROFILE,
+    VariantMeasurement,
+    build_markdown_report,
+    features_for_variant,
+    load_default_features,
+    parse_dynamic_library_paths,
+    parse_linker_map_crates,
+    parse_nm_symbols,
+    parse_section_sizes,
+    selected_variants,
+    summarize_tarball,
+)
 
 from servo.command_base import (
     CommandBase,
@@ -216,6 +231,286 @@ class PostBuildCommands(CommandBase):
                 print(f"`cargo llvm-cov` exited with non-zero status {exception.returncode}")
             return exception.returncode
         return 0
+
+    @Command("size-report", description="Build and compare production-stripped size variants", category="post-build")
+    @CommandArgument("--jobs", "-j", default=None, help="Number of jobs to run in parallel")
+    @CommandArgument("--skip-package", action="store_true", help="Skip package generation and package-size metrics")
+    @CommandArgument(
+        "--include-second-order",
+        action="store_true",
+        help="Also run the currently supported second-order size variants",
+    )
+    @CommandArgument(
+        "--variant",
+        action="append",
+        dest="variants",
+        help="Only run the named variant (repeat to select multiple variants)",
+    )
+    @CommandArgument("--top", type=int, default=15, help="Number of top crates and symbols to report")
+    @CommandArgument("--output", default=None, help="Write the Markdown report to this file")
+    @CommandArgument("--json-output", default=None, help="Write machine-readable JSON results to this file")
+    @CommandBase.common_command_arguments(build_configuration=True, package_configuration=True)
+    def size_report(
+        self,
+        jobs: str | None = None,
+        skip_package: bool = False,
+        include_second_order: bool = False,
+        variants: list[str] | None = None,
+        top: int = 15,
+        output: str | None = None,
+        json_output: str | None = None,
+        flavor: str | None = None,
+        **kwargs: Any,
+    ) -> int:
+        manifest_path = path.join(self.get_top_dir(), "ports", "servoshell", "Cargo.toml")
+        default_features = load_default_features(manifest_path)
+        try:
+            selected, skipped = selected_variants(variants, include_second_order)
+        except ValueError as error:
+            print(error)
+            return 1
+        extra_features = list(self.features)
+        base_media_enabled = self.enable_media
+        build_type = BuildType.custom(DEFAULT_SIZE_REPORT_PROFILE)
+        output_dir = path.join(servo.util.get_target_dir(), build_type.directory_name(), "size-report")
+        os.makedirs(output_dir, exist_ok=True)
+        self.ensure_bootstrapped()
+
+        measurements: list[VariantMeasurement] = []
+        for variant in selected:
+            measurement = VariantMeasurement(
+                name=variant.name,
+                description=variant.description,
+                feature_list=[],
+                removed_features=list(variant.removed_features),
+                media_stack=variant.media_stack,
+            )
+
+            variant_features = features_for_variant(default_features, variant)
+            for feature in extra_features:
+                if feature not in variant_features:
+                    variant_features.append(feature)
+            measurement.feature_list = variant_features
+
+            self.features = variant_features
+            self.enable_media = base_media_enabled if variant.media_stack is None else self.is_media_enabled(variant.media_stack)
+            env = self.build_env()
+            map_path = path.join(output_dir, f"{variant.name}.map")
+            env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + f" -C link-arg=-Wl,-Map,{map_path}"
+
+            cargo_args = ["--profile", build_type.profile, "--no-default-features"]
+            if jobs is not None:
+                cargo_args += ["-j", jobs]
+
+            status = self.run_cargo_build_like_command("rustc", cargo_args, env=env)
+            if status != 0:
+                return status
+
+            binary_path = self.get_binary_path(build_type)
+            measurement.binary_path = binary_path
+            measurement.binary_size = path.getsize(binary_path)
+            measurement.shared_libraries, measurement.shared_library_footprint = self._collect_shared_libraries(binary_path)
+
+            if variant.name == "baseline":
+                measurement.section_sizes = self._capture_section_sizes(binary_path)
+                measurement.top_symbols = self._capture_top_symbols(binary_path, top)
+                if path.exists(map_path):
+                    with open(map_path, encoding="utf-8", errors="replace") as linker_map:
+                        measurement.top_crates = parse_linker_map_crates(linker_map.read(), top)
+                else:
+                    measurement.notes.append(f"No linker map was produced for `{variant.name}`.")
+                if not measurement.top_symbols:
+                    measurement.notes.append(
+                        "No symbol-level entries were recovered from the stripped baseline binary; crate attribution comes from the linker map."
+                    )
+
+            if not skip_package:
+                package_status = Registrar.dispatch(
+                    "package",
+                    context=self.context,
+                    build_type=build_type,
+                    flavor=flavor,
+                    preserve_app="darwin" in self.target.triple(),
+                )
+                if package_status not in (0, None):
+                    return package_status
+                self._populate_package_metrics(measurement, build_type)
+
+            measurements.append(measurement)
+
+        report = build_markdown_report(build_type.profile, self.target.triple(), measurements, skipped)
+        output_path = output or path.join(output_dir, "report.md")
+        with open(output_path, "w", encoding="utf-8") as report_file:
+            report_file.write(report)
+
+        payload = {
+            "target": self.target.triple(),
+            "profile": build_type.profile,
+            "measurements": [measurement.to_dict() for measurement in measurements],
+            "skipped_variants": [
+                {
+                    "name": variant.name,
+                    "description": variant.description,
+                    "reason": variant.unavailable_reason,
+                }
+                for variant in skipped
+            ],
+        }
+        json_output_path = json_output or path.join(output_dir, "report.json")
+        with open(json_output_path, "w", encoding="utf-8") as json_file:
+            json.dump(payload, json_file, indent=2, sort_keys=True)
+
+        print(report, end="")
+        print(f"Wrote Markdown report to {output_path}")
+        print(f"Wrote JSON report to {json_output_path}")
+        return 0
+
+    def _run_capture(self, command: list[str]) -> str | None:
+        try:
+            result = subprocess.run(command, check=True, capture_output=True, text=True)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return None
+        return result.stdout
+
+    def _capture_section_sizes(self, binary_path: str) -> dict[str, int]:
+        for command in (["llvm-size", "-A", binary_path], ["size", "-A", binary_path]):
+            output = self._run_capture(command)
+            if output:
+                return parse_section_sizes(output)
+        return {}
+
+    def _capture_top_symbols(self, binary_path: str, limit: int) -> list[tuple[str, int]]:
+        for command in (
+            ["llvm-nm", "--print-size", "--size-sort", "--radix=d", binary_path],
+            ["nm", "-S", "--size-sort", "--radix=d", binary_path],
+        ):
+            output = self._run_capture(command)
+            if output:
+                return parse_nm_symbols(output, limit)
+        return []
+
+    def _collect_shared_libraries(self, binary_path: str) -> tuple[list[tuple[str, int]], int]:
+        commands = []
+        if is_linux() or is_freebsd():
+            commands.append(["ldd", binary_path])
+        elif servo.platform.get().is_macos:
+            commands.append(["otool", "-L", binary_path])
+
+        library_paths: list[str] = []
+        for command in commands:
+            output = self._run_capture(command)
+            if output:
+                library_paths = parse_dynamic_library_paths(output)
+                break
+
+        libraries: list[tuple[str, int]] = []
+        total = 0
+        for library_path in library_paths:
+            if not path.exists(library_path):
+                continue
+            library_size = path.getsize(library_path)
+            libraries.append((library_path, library_size))
+            total += library_size
+        return libraries, total
+
+    def _package_root(self, build_type: BuildType) -> str:
+        return path.dirname(self.get_binary_path(build_type))
+
+    def _locate_package_path(self, build_type: BuildType) -> str | None:
+        package_root = self._package_root(build_type)
+        target_triple = self.target.triple()
+        if is_android(self.target):
+            return self.target.get_package_path(build_type.directory_name())
+        if "darwin" in target_triple:
+            return path.join(package_root, "Servo.app")
+        if "windows" in target_triple:
+            return path.join(package_root, "msi", "ServoShell.zip")
+        return path.join(package_root, "servo-tech-demo.tar.gz")
+
+    def _directory_size(self, root: str) -> int:
+        total = 0
+        for current_root, _, files in os.walk(root):
+            for filename in files:
+                total += path.getsize(path.join(current_root, filename))
+        return total
+
+    def _directory_subset_size(self, root: str, folder_name: str) -> int:
+        total = 0
+        for current_root, _, files in os.walk(root):
+            rel_root = path.relpath(current_root, root)
+            rel_root = "" if rel_root == "." else rel_root
+            if folder_name not in rel_root.split(path.sep):
+                continue
+            for filename in files:
+                total += path.getsize(path.join(current_root, filename))
+        return total
+
+    def _zip_summary(self, zip_path: str) -> tuple[int, int, int, int]:
+        installed_size = 0
+        resource_size = 0
+        library_size = 0
+        binary_size = 0
+        with zipfile.ZipFile(zip_path) as archive:
+            for member in archive.infolist():
+                if member.is_dir():
+                    continue
+                installed_size += member.file_size
+                member_name = member.filename.lower()
+                if "/resources/" in member_name:
+                    resource_size += member.file_size
+                if member_name.endswith((".dll", ".dylib", ".so")):
+                    library_size += member.file_size
+                if path.basename(member.filename).startswith("servoshell"):
+                    binary_size += member.file_size
+        return installed_size, resource_size, library_size, binary_size
+
+    def _populate_package_metrics(self, measurement: VariantMeasurement, build_type: BuildType) -> None:
+        package_path = self._locate_package_path(build_type)
+        if package_path is None or not path.exists(package_path):
+            measurement.notes.append(f"Package artifact not found for `{measurement.name}`.")
+            return
+
+        measurement.package_path = package_path
+
+        target_triple = self.target.triple()
+        if path.isdir(package_path):
+            measurement.installed_size = self._directory_size(package_path)
+            measurement.packaged_resource_size = self._directory_subset_size(package_path, "Resources")
+            measurement.packaged_library_size = self._directory_subset_size(package_path, "lib")
+            binary_path = path.join(package_path, "Contents", "MacOS", "servoshell")
+            if path.exists(binary_path):
+                measurement.packaged_binary_size = path.getsize(binary_path)
+            return
+
+        measurement.package_archive_size = path.getsize(package_path)
+
+        if package_path.endswith((".tar", ".tar.gz", ".tgz")):
+            (
+                measurement.installed_size,
+                measurement.packaged_resource_size,
+                measurement.packaged_library_size,
+                measurement.packaged_binary_size,
+            ) = summarize_tarball(package_path)
+            return
+
+        if package_path.endswith(".zip"):
+            (
+                measurement.installed_size,
+                measurement.packaged_resource_size,
+                measurement.packaged_library_size,
+                measurement.packaged_binary_size,
+            ) = self._zip_summary(package_path)
+            return
+
+        if is_android(self.target) or "openharmony" in target_triple or "ohos" in target_triple:
+            measurement.notes.append(
+                f"Only the archive size was recorded for `{measurement.name}` because packaged contents are not expanded on this platform."
+            )
+            return
+
+        measurement.notes.append(
+            f"Archive size was recorded for `{measurement.name}`, but installed/package breakdown is not implemented for `{target_triple}`."
+        )
 
     @Command("android-emulator", description="Run the Android emulator", category="post-build")
     @CommandArgument("args", nargs="...", help="Command-line arguments to be passed through to the emulator")

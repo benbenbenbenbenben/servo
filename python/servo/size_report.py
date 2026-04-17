@@ -170,7 +170,7 @@ def parse_dynamic_library_paths(output: str) -> list[str]:
 
 
 def crate_name_from_path(object_path: str) -> str:
-    archive_match = re.search(r"/lib(?P<crate>[^/]+?)(?:-[0-9a-f]{7,})?\.rlib(?:\(|$)", object_path)
+    archive_match = re.search(r"/lib(?P<crate>[^/]+?)(?:-[0-9a-f]{7,16})?\.rlib(?:\(|$)", object_path)
     if archive_match:
         return archive_match.group("crate")
 
@@ -180,7 +180,7 @@ def crate_name_from_path(object_path: str) -> str:
             base_name = base_name[: -len(suffix)]
             break
 
-    hash_match = re.match(r"(?P<crate>.+?)-[0-9a-f]{7,}(?:[.-].*)?$", base_name)
+    hash_match = re.match(r"(?P<crate>.+?)-[0-9a-f]{7,16}(?:[.-].*)?$", base_name)
     if hash_match:
         return hash_match.group("crate")
 

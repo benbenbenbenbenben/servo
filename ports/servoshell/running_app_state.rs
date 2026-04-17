@@ -255,7 +255,7 @@ impl RunningAppState {
             #[cfg(not(feature = "webdriver"))]
             {
                 warn!(
-                    "WebDriver support requested on port {port}, but servoshell was built without the `webdriver` feature."
+                    "WebDriver support requested on port {port}, but ServoShell was built without the `webdriver` feature."
                 );
                 None
             }

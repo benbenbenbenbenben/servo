@@ -331,7 +331,7 @@ class PostBuildCommands(CommandBase):
                     context=self.context,
                     build_type=build_type,
                     flavor=flavor,
-                    preserve_app="darwin" in self.target.triple(),
+                    preserve_app=self.target.triple().endswith("darwin"),
                 )
                 if package_status not in (0, None):
                     return package_status

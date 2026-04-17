@@ -7,7 +7,8 @@ on:
       - main
     # Only rebuild if the Dockerfile or dependencies change.
     paths: &container-paths
-      - '.devcontainer/**'
+      - 'Containerfile'
+      - 'Containerfile.dockerignore'
       - 'python/servo/platform/linux_packages/**'
       - '.github/workflows/docker.yml'
   workflow_dispatch:
@@ -50,7 +51,7 @@ jobs:
       - name: Build ${{ matrix.arch }} image
         run: |
           docker build . \
-            --file .devcontainer/Ubuntu.Dockerfile \
+            --file Containerfile \
             --platform ${{ matrix.platform }} \
             --tag ${{ env.IMAGE_NAME }}:${{ matrix.arch }} \
             --label "runnumber=${GITHUB_RUN_ID}"

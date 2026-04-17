@@ -1,5 +1,5 @@
-# Dockerfile for the servo devcontainer environment.
-# Note that the build-context is the repository root.
+# Containerfile for the Servo Linux build environment.
+# Note that the build context is the repository root.
 # We use a multi-stage build to keep the final image size down.
 
 # We use a prebuilt image for `uv` to speed up builds and later copy the artifacts
@@ -10,8 +10,12 @@ FROM ubuntu:24.04 AS base
 
 # Install apt dependencies.
 COPY python/servo/platform/linux_packages /tmp/linux_packages
-RUN apt-get update \
-    &&  /tmp/linux_packages/generate_pkg_list.sh /tmp/linux_packages/apt/* | xargs apt-get install -y --no-install-recommends \
+RUN /tmp/linux_packages/generate_pkg_list.sh /tmp/linux_packages/apt/* > /tmp/apt-packages.txt \
+    && apt-get update \
+    && (xargs -a /tmp/apt-packages.txt apt-get install -y --no-install-recommends \
+    || (rm -rf /var/lib/apt/lists/* \
+    && apt-get update \
+    && xargs -a /tmp/apt-packages.txt apt-get install -y --no-install-recommends)) \
     && curl --version
 
 # Required due to https://github.com/servo/servo/issues/35029
@@ -27,18 +31,16 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 # Keep the list of components in sync with `rust-toolchain.toml` file.
 RUN curl https://sh.rustup.rs -sSf \
         | sh -s -- --default-toolchain ${RUST_VERSION} -y --component clippy,llvm-tools,llvm-tools-preview,rustc-dev,rustfmt,rust-src \
-    && \
-    rustup --version; \
-    cargo --version; \
-    rustc --version;
+    && rustup --version \
+    && cargo --version \
+    && rustc --version
 
-# prebuilt rust tools we use
+# Prebuilt rust tools we use.
 FROM base AS rust_builder
 
 # TODO: We would need to use `ARG` and install specific versions, to ensure
 # that the tools are updated and not always cached.
 RUN cargo install cargo-deny cargo-nextest taplo-cli cargo-about --locked
-
 
 FROM base AS final
 

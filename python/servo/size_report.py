@@ -9,6 +9,10 @@ import tomllib
 from typing import Iterable, Sequence
 
 DEFAULT_SIZE_REPORT_PROFILE = "production-stripped"
+NOT_AVAILABLE = "n/a"
+# Cargo artifact filenames conventionally include a short hexadecimal hash. Keep this
+# in one place so the linker-map parsing assumptions are easy to update if Cargo changes.
+CARGO_HASH_PATTERN = r"[0-9a-f]{7,16}"
 
 
 @dataclass(frozen=True)
@@ -170,7 +174,7 @@ def parse_dynamic_library_paths(output: str) -> list[str]:
 
 
 def crate_name_from_path(object_path: str) -> str:
-    archive_match = re.search(r"/lib(?P<crate>[^/]+?)(?:-[0-9a-f]{7,16})?\.rlib(?:\(|$)", object_path)
+    archive_match = re.search(rf"/lib(?P<crate>[^/]+?)(?:-{CARGO_HASH_PATTERN})?\.rlib(?:\(|$)", object_path)
     if archive_match:
         return archive_match.group("crate")
 
@@ -180,7 +184,7 @@ def crate_name_from_path(object_path: str) -> str:
             base_name = base_name[: -len(suffix)]
             break
 
-    hash_match = re.match(r"(?P<crate>.+?)-[0-9a-f]{7,16}(?:[.-].*)?$", base_name)
+    hash_match = re.match(rf"(?P<crate>.+?)-{CARGO_HASH_PATTERN}(?:[.-].*)?$", base_name)
     if hash_match:
         return hash_match.group("crate")
 
@@ -227,7 +231,7 @@ def summarize_tarball(tarball_path: str) -> tuple[int, int, int, int]:
 
 def format_bytes(size: int | None) -> str:
     if size is None:
-        return "n/a"
+        return NOT_AVAILABLE
     suffixes = ["B", "KiB", "MiB", "GiB"]
     value = float(size)
     for suffix in suffixes:

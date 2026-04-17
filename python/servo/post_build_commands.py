@@ -297,7 +297,8 @@ class PostBuildCommands(CommandBase):
             self.enable_media = base_media_enabled if variant.media_stack is None else self.is_media_enabled(variant.media_stack)
             env = self.build_env()
             map_path = path.join(output_dir, f"{variant.name}.map")
-            env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + f" -C link-arg=-Wl,-Map,{map_path}"
+            rustflags = env.get("RUSTFLAGS", "")
+            env["RUSTFLAGS"] = f"{rustflags} -C link-arg=-Wl,-Map,{map_path}".strip()
 
             cargo_args = ["--profile", build_type.profile, "--no-default-features"]
             if jobs is not None:

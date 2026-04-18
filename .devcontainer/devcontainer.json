@@ -3,9 +3,9 @@
 {
 	"name": "Ubuntu",
 	"image": "ghcr.io/servo/servo/devcontainer-ubuntu:latest",
-	// Alternatively, uncomment the "build" property below to build the image from the Dockerfile in this folder.
+	// Alternatively, uncomment the "build" property below to build the image from the repository Containerfile.
 	// "build": {
-	// 	"dockerfile": "Ubuntu.Dockerfile",
+	// 	"dockerfile": "../Containerfile",
 	// 	"context": ".."
 	// },
 

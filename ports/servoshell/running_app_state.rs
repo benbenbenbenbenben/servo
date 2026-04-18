@@ -240,16 +240,28 @@ impl RunningAppState {
     ) -> Self {
         servo.set_delegate(Rc::new(ServoShellServoDelegate));
 
-        let webdriver_receiver = servoshell_preferences.webdriver_port.get().map(|port| {
-            let (embedder_sender, embedder_receiver) = unbounded();
-            webdriver_server::start_server(
-                port,
-                embedder_sender,
-                event_loop_waker,
-                default_preferences,
-            );
-            embedder_receiver
-        });
+        let webdriver_receiver = if let Some(port) = servoshell_preferences.webdriver_port.get() {
+            #[cfg(feature = "webdriver")]
+            {
+                let (embedder_sender, embedder_receiver) = unbounded();
+                webdriver_server::start_server(
+                    port,
+                    embedder_sender,
+                    event_loop_waker,
+                    default_preferences,
+                );
+                Some(embedder_receiver)
+            }
+            #[cfg(not(feature = "webdriver"))]
+            {
+                warn!(
+                    "WebDriver support requested on port {port}, but ServoShell was built without the `webdriver` feature."
+                );
+                None
+            }
+        } else {
+            None
+        };
 
         let experimental_preferences_enabled =
             Cell::new(servoshell_preferences.experimental_preferences_enabled);
